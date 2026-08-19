@@ -88,9 +88,9 @@ stages:
         - task: AzureKeyVault@2
           displayName: 'Read GitHub token'
           inputs:
-            azureSubscription: 'Tesseract-CICD'
+            azureSubscription: 'sc-acr-push-core-prod'
             KeyVaultName: 'prax-cicd-kv'
-            SecretsFilter: 'GithubSdkMirrorToken'
+            SecretsFilter: 'GITHUB-SDK-MIRROR-TOKEN'
             RunAsPreJob: false
 
         # package.json is the single source of truth for the release tag, so a release can
@@ -127,7 +127,7 @@ stages:
         # Mirror to the public repo. --force-with-lease rather than --force: if someone pushed
         # to GitHub directly, this fails loudly instead of destroying their commit.
         - powershell: |
-            $token = '$(GithubSdkMirrorToken)'
+            $token = '$(GITHUB-SDK-MIRROR-TOKEN)'
             $repo  = '$(githubRepo)'
 
             git config user.email "ci@tesseractsoftwares.com"
@@ -152,7 +152,7 @@ stages:
         # Tag and release, but only when this version has not been released before, so
         # re-running a build is harmless rather than a failure.
         - powershell: |
-            $token   = '$(GithubSdkMirrorToken)'
+            $token   = '$(GITHUB-SDK-MIRROR-TOKEN)'
             $repo    = '$(githubRepo)'
             $version = '$(pkgVersion)'
             $tag     = "v$version"
