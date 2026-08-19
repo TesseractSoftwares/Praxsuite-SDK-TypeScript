@@ -1,0 +1,199 @@
+# Praxsuite SDK for TypeScript - validate, package, and mirror to GitHub
+#
+# PR and development: validate only.
+# master:             validate, package a .tgz, mirror the source to the public GitHub repo,
+#                     and cut a GitHub Release carrying the tarball.
+#
+# Validation typechecks, builds and runs the offline suite - 45 tests, no network and no
+# workspace needed. They mirror the shared SDK conformance contract.
+
+trigger:
+  branches:
+    include:
+      - master
+      - development
+  paths:
+    exclude:
+      - README.md
+      - CHANGELOG.md
+      - docs/*
+
+pr:
+  branches:
+    include:
+      - master
+      - development
+
+pool:
+  name: Tesseract-BuildPool
+  demands:
+    - Agent.OS -equals Linux
+
+variables:
+  buildConfiguration: 'Release'
+  isMaster: $[eq(variables['Build.SourceBranch'], 'refs/heads/master')]
+  githubRepo: 'TesseractSoftwares/Praxsuite-SDK-TypeScript'
+
+stages:
+
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: Validate
+  displayName: 'Build and test'
+  jobs:
+    - job: Validate
+      steps:
+        - task: NodeTool@0
+          displayName: 'Install Node'
+          inputs:
+            versionSpec: '22.x'
+
+        - script: npm ci
+          displayName: 'Install'
+
+        - script: npm run typecheck
+          displayName: 'Typecheck'
+
+        - script: npm test
+          displayName: 'Test'
+
+        - script: npm run build
+          displayName: 'Build'
+
+        # This repo is mirrored to a PUBLIC GitHub repo, so hold it to the same standard as the
+        # other SDKs: no secret keys, and no real workspace identifiers. A workspace GUID is not
+        # cosmetic - /auth/config is unauthenticated, so a GUID alone fetches that workspace's
+        # publishable key.
+        - script: |
+            set -e
+            if grep -rEn 'sk_live_[A-Za-z0-9]{16,}'                  --include='*.ts' --include='*.js' --include='*.json' --include='*.md'                  --include='*.yml' --exclude-dir=node_modules --exclude-dir=dist                  --exclude-dir=.git . ; then
+              echo "##vso[task.logissue type=error]A Praxsuite secret key is present. Revoke it now - this repo is mirrored publicly."
+              exit 1
+            fi
+            echo "No secret keys found."
+          displayName: 'Scan for leaked secret keys'
+
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: Publish
+  displayName: 'Package and mirror to GitHub'
+  dependsOn: Validate
+  condition: and(succeeded(), eq(variables.isMaster, true))
+  jobs:
+    - job: Publish
+      steps:
+        # Full history: the mirror push needs real commits, not a shallow clone.
+        - checkout: self
+          fetchDepth: 0
+          persistCredentials: true
+
+        - task: AzureKeyVault@2
+          displayName: 'Read GitHub token'
+          inputs:
+            azureSubscription: 'Tesseract-CICD'
+            KeyVaultName: 'prax-cicd-kv'
+            SecretsFilter: 'GithubSdkMirrorToken'
+            RunAsPreJob: false
+
+        # package.json is the single source of truth for the release tag, so a release can
+        # never silently disagree with the version consumers actually install.
+        - powershell: |
+            $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+            $version = $pkg.version
+            if (-not $version) {
+              Write-Host "##vso[task.logissue type=error]package.json has no version field."
+              exit 1
+            }
+            Write-Host "Package version: $version"
+            Write-Host "##vso[task.setvariable variable=pkgVersion]$version"
+          displayName: 'Read package version'
+
+        # UPM consumes a plain npm tarball, so npm pack IS the packaging step - a source-only
+        # package needs no Unity build.
+        - script: |
+            set -e
+            npm ci
+            npm run build
+            npm pack
+            mkdir -p "$(Build.ArtifactStagingDirectory)/package"
+            mv ./*.tgz "$(Build.ArtifactStagingDirectory)/package/"
+            ls -la "$(Build.ArtifactStagingDirectory)/package/"
+          displayName: 'Pack npm tarball'
+
+        - task: PublishBuildArtifacts@1
+          displayName: 'Publish tarball artifact'
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/package'
+            ArtifactName: 'npm-package'
+
+        # Mirror to the public repo. --force-with-lease rather than --force: if someone pushed
+        # to GitHub directly, this fails loudly instead of destroying their commit.
+        - powershell: |
+            $token = '$(GithubSdkMirrorToken)'
+            $repo  = '$(githubRepo)'
+
+            git config user.email "ci@tesseractsoftwares.com"
+            git config user.name  "Tesseract CI"
+
+            git remote remove github 2>$null
+            git remote add github "https://x-access-token:$token@github.com/$repo.git"
+
+            # Needed for --force-with-lease to have a baseline to compare against.
+            git fetch github master 2>$null
+
+            Write-Host "Mirroring master to github.com/$repo"
+            git push github HEAD:refs/heads/master --force-with-lease
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "##vso[task.logissue type=error]Mirror push rejected: GitHub has commits this repo does not. Reconcile them rather than forcing."
+              exit 1
+            }
+
+            Write-Host "Mirror complete."
+          displayName: 'Mirror source to GitHub'
+
+        # Tag and release, but only when this version has not been released before, so
+        # re-running a build is harmless rather than a failure.
+        - powershell: |
+            $token   = '$(GithubSdkMirrorToken)'
+            $repo    = '$(githubRepo)'
+            $version = '$(pkgVersion)'
+            $tag     = "v$version"
+
+            $headers = @{
+              Authorization = "Bearer $token"
+              Accept        = 'application/vnd.github+json'
+              'User-Agent'  = 'tesseract-ci'
+            }
+
+            $existing = $null
+            try {
+              $existing = Invoke-RestMethod -Headers $headers `
+                -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+            } catch { }
+
+            if ($existing) {
+              Write-Host "Release $tag already exists - nothing to publish."
+              exit 0
+            }
+
+            $notes = "Install in Unity via Package Manager -> Add package from git URL:`n`n" +
+                     "    https://github.com/$repo.git`n`n" +
+                     "See CHANGELOG.md for what changed."
+
+            $body = @{
+              tag_name   = $tag
+              name       = "Praxsuite SDK for TypeScript $version"
+              body       = $notes
+              draft      = $false
+              prerelease = $false
+            } | ConvertTo-Json
+
+            $release = Invoke-RestMethod -Method Post -Headers $headers `
+              -Uri "https://api.github.com/repos/$repo/releases" -Body $body -ContentType 'application/json'
+
+            $tgz = Get-ChildItem '$(Build.ArtifactStagingDirectory)/package' -Filter '*.tgz' | Select-Object -First 1
+            $uploadUrl = "https://uploads.github.com/repos/$repo/releases/$($release.id)/assets?name=$($tgz.Name)"
+
+            Invoke-RestMethod -Method Post -Headers $headers -Uri $uploadUrl `
+              -InFile $tgz.FullName -ContentType 'application/gzip' | Out-Null
+
+            Write-Host "Published release $tag with $($tgz.Name)"
+          displayName: 'Cut GitHub release'

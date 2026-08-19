@@ -1,0 +1,54 @@
+{
+  "name": "@praxsuite/sdk",
+  "version": "1.0.0",
+  "description": "Praxsuite SDK for TypeScript and JavaScript. Auth, queries, files and server-authoritative endpoints for browsers, Node, Deno, Bun and React Native. Zero dependencies.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "praxsuite",
+    "backend",
+    "baas",
+    "database",
+    "authentication",
+    "sdk",
+    "typescript"
+  ],
+  "author": {
+    "name": "Tesseract Softwares",
+    "url": "https://praxsuite.com"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TesseractSoftwares/Praxsuite-SDK-TypeScript.git"
+  },
+  "homepage": "https://praxsuite.com",
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0"
+  }
+}

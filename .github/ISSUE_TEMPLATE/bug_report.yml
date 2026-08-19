@@ -1,0 +1,68 @@
+name: Bug report
+description: Something in the SDK does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issues do not belong here.** Email security@tesseractsoftwares.com instead —
+        see [SECURITY.md](../../blob/master/SECURITY.md).
+
+        Please do not paste API keys, workspace GUIDs or session tokens into this form. A
+        workspace GUID alone is enough to fetch that workspace's publishable key.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: code
+    attributes:
+      label: Error code
+      description: "SDK errors carry a stable code, e.g. FORBIDDEN, RATE_LIMIT_EXCEEDED, UNKNOWN_TABLE. Include it if there was one."
+      placeholder: PraxException.Code
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest snippet that shows the problem.
+      render: typescript
+    validations:
+      required: true
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: unity-version
+    attributes:
+      label: Runtime version
+      placeholder: "node 22.x / Chrome 128"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options: [Browser, Node, Deno, Bun, React Native, Electron, Other]
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Console output. The SDK redacts credentials, but check before pasting."
+      render: shell

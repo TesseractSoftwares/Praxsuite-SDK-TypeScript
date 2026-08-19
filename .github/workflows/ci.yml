@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for Praxsuite secret keys and hardcoded workspaces
+        run: |
+          if grep -rEn 'sk_live_[A-Za-z0-9]{16,}' \
+               --include='*.ts' --include='*.js' --include='*.json' --include='*.md' \
+               --exclude-dir=node_modules --exclude-dir=.git . ; then
+            echo "::error::A Praxsuite secret key is present in this public repository."
+            exit 1
+          fi
+          echo "No secret keys found."
