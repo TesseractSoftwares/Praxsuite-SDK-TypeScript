@@ -1,5 +1,6 @@
 # Praxsuite SDK for TypeScript
 
+[![CI](https://github.com/TesseractSoftwares/Praxsuite-SDK-TypeScript/actions/workflows/ci.yml/badge.svg)](https://github.com/TesseractSoftwares/Praxsuite-SDK-TypeScript/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-Praxsuite%20Open%20SDK-blue)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](package.json)
 [![Types](https://img.shields.io/badge/types-included-blue)](package.json)
