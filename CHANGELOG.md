@@ -39,9 +39,8 @@ First release.
 
 ### Verified
 
-45 offline tests, mirroring the shared
-[SDK conformance contract](https://github.com/TesseractSoftwares/Praxsuite-SDK-Conformance).
-Notably pinned: mutation guardrails throw **synchronously** rather than as a rejected promise
+45 offline tests, pinning the wire shapes every Praxsuite SDK implements identically.
+Notably: mutation guardrails throw **synchronously** rather than as a rejected promise
 (a caller who does not await must not get silence), `meta.total` is read rather than
 `totalCount`, quota and rate limit classify oppositely despite sharing HTTP 429, and only the
 operators the gateway implements are exposed.

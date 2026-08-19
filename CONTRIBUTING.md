@@ -19,13 +19,18 @@ npm run typecheck
 npm run build
 ```
 
-## The conformance contract
+## The conformance tests
 
-The test suite mirrors [Praxsuite-SDK-Conformance](https://github.com/TesseractSoftwares/Praxsuite-SDK-Conformance),
-which every Praxsuite SDK implements identically. Each case there exists because getting it wrong
-produces *silently wrong data* rather than an error, and at least one shipped SDK got it wrong.
+`test/conformance.test.ts` pins the exact wire shapes the gateway expects, and every Praxsuite
+SDK implements the same set so behaviour cannot drift between languages.
 
-**If you change wire-shape behaviour, change the contract first**, then every SDK.
+Each case exists because getting it wrong produces *silently wrong data* rather than an error —
+a count that returns 0 forever, an operator the server rejects at runtime, a guardrail that
+throws into a promise nobody awaits.
+
+**Treat these as fixed.** If you believe one is wrong, it is a gateway-behaviour question rather
+than an SDK one — open an issue and we will check it against the backend before changing
+anything here.
 
 ## Traps worth knowing
 

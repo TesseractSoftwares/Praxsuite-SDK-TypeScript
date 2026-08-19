@@ -137,10 +137,11 @@ npm run build
 Bug reports and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues do **not**
 go in the issue tracker: see [SECURITY.md](SECURITY.md).
 
-The test suite mirrors the shared
-[SDK conformance contract](https://github.com/TesseractSoftwares/Praxsuite-SDK-Conformance), which
-every Praxsuite SDK implements identically. If you change wire-shape behaviour, change it there
-first.
+The test suite pins the exact wire shapes the gateway expects — response envelopes, operator
+names, metadata field names, error classification. Those cases come from a shared contract every
+Praxsuite SDK implements identically, so behaviour does not drift between languages. If a test
+looks oddly specific, that is why: each one exists because getting it wrong produces silently
+wrong data rather than an error.
 
 ## License
 
