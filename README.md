@@ -128,6 +128,41 @@ controller.abort();
 
 ---
 
+## Conformance is the law
+
+Praxsuite has SDKs in several languages. Where they touch the gateway they do **not** get to
+disagree. A single normative contract defines the shared behaviour, and every SDK implements it
+identically:
+
+1. **The contract is normative.** Where this SDK and the contract differ, this SDK is wrong.
+2. **Every rule cites the backend source it derives from.** No rule rests on memory.
+3. **Every rule exists because getting it wrong fails silently.** Wrong data, not an error.
+4. **A behaviour change is a contract change first.** Not an implementation detail.
+
+The contract is internal and deliberately has no public repository. Its value is that it is
+authoritative for us, not that it is browsable — and it cites backend internals that are not ours
+to publish. Everything a consumer of this SDK needs to know is in this README.
+
+What it pins down, and why each one earned its place:
+
+- **Operators.** Only the thirteen the parser accepts. A friendlier name is a runtime 400.
+- **`meta.total`, never `meta.totalCount`.** Reading the wrong name returns nothing and reports
+  zero, silently, forever. One SDK shipped that for months.
+- **Three response envelopes.** `/query` is bare, `/auth/*` nests under `.data`, `/files` errors
+  are a bare string. Assuming one shape mis-parses the other two.
+- **`limit` is clamped up to a minimum of 1.** A zero-row count request quietly returns a row.
+- **Unscoped updates and deletes refused before sending**, synchronously.
+- **Secret keys refused wherever a credential would be exposed.** No flag, no override.
+- **No client-supplied identity parameter.** The server ignores it, so it would read as a
+  security boundary while being decorative.
+
+The suite runs offline — no workspace, no network, no credentials:
+
+```bash
+npm test        # 45 checks
+```
+
+
 ## Contributing
 
 ```bash
