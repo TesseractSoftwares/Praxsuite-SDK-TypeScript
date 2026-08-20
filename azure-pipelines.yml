@@ -151,10 +151,22 @@ stages:
 
             RELEASE=$(curl -sf -X POST -H "$AUTH" "$API/releases"               -d "{\"tag_name\":\"$TAG\",\"name\":\"Praxsuite SDK for TypeScript $(pkgVersion)\",\"body\":\"Install: npm install @praxsuite/sdk  --  see CHANGELOG.md\",\"draft\":false,\"prerelease\":false}")
 
-            RELEASE_ID=$(echo "$RELEASE" | head -5 | grep -m1 '"id"' | sed 's/[^0-9]//g')
+            RELEASE_ID=$(echo "$RELEASE" | grep -o '"id": *[0-9]*' | head -1 | tr -dc '0-9')
+            if [ -z "$RELEASE_ID" ]; then
+              echo "##vso[task.logissue type=error]Could not read the release id from the GitHub response."
+              exit 1
+            fi
             TGZ=$(ls "$(Build.ArtifactStagingDirectory)/package/"*.tgz | head -1)
 
-            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/gzip"               --data-binary @"$TGZ"               "https://uploads.github.com/repos/$(githubRepo)/releases/$RELEASE_ID/assets?name=$(basename $TGZ)" >/dev/null
+            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/gzip"               --data-binary @"$TGZ"               "https://uploads.github.com/repos/$(githubRepo)/releases/$RELEASE_ID/assets?name=${TGZ##*/}"
 
-            echo "Published release $TAG"
+            # Verify rather than trust: assert the asset is actually attached. The first
+            # release cut by this pipeline reported success while uploading nothing.
+            ASSETS=$(curl -sf -H "$AUTH" "$API/releases/tags/$TAG" | grep -c '"state": *"uploaded"' || true)
+            if [ "$ASSETS" -lt 1 ]; then
+              echo "##vso[task.logissue type=error]Release $TAG was created but no asset attached. Check the upload URL and the asset name."
+              exit 1
+            fi
+
+            echo "Published release $TAG with $ASSETS asset(s)"
           displayName: 'Cut GitHub release'
