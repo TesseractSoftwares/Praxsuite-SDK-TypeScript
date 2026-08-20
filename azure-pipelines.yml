@@ -118,8 +118,11 @@ stages:
             PathtoPublish: '$(Build.ArtifactStagingDirectory)/package'
             ArtifactName: 'package'
 
-        # --force-with-lease, not --force: if someone pushed to GitHub directly, fail loudly
-        # rather than destroy their commit.
+        # The mirror must not overwrite history it does not contain. --force-with-lease was used
+        # here, preceded by a fetch, which cannot protect anything: fetching sets the
+        # remote-tracking ref to whatever GitHub currently has, so the lease always matches and
+        # the push always wins. It silently reset commits pushed straight to a sibling SDK's
+        # mirror, twice.
         - script: |
             set -e
             git config user.email "ci@tesseractsoftwares.com"
@@ -127,11 +130,20 @@ stages:
 
             git remote remove github 2>/dev/null || true
             git remote add github "https://x-access-token:$(GITHUB-SDK-MIRROR-TOKEN)@github.com/$(githubRepo).git"
-            git fetch github master || true
+            # Read the mirror's head BEFORE fetching, so the check is against what GitHub
+            # actually has rather than against a ref the fetch just overwrote.
+            REMOTE_SHA=$(git ls-remote github refs/heads/master | cut -f1)
+            if [ -n "$REMOTE_SHA" ]; then
+              git fetch github master
+              if ! git merge-base --is-ancestor "$REMOTE_SHA" HEAD; then
+                echo "##vso[task.logissue type=error]github.com/$(githubRepo) is at $REMOTE_SHA, which is not an ancestor of this build. Someone pushed to the mirror directly. Reconcile it - do not overwrite."
+                exit 1
+              fi
+            fi
 
             echo "Mirroring master to github.com/$(githubRepo)"
-            if ! git push github HEAD:refs/heads/master --force-with-lease; then
-              echo "##vso[task.logissue type=error]Mirror push rejected: GitHub has commits this repo does not. Reconcile them rather than forcing."
+            if ! git push github HEAD:refs/heads/master; then
+              echo "##vso[task.logissue type=error]Mirror push failed. Check the token has contents:write on the mirror."
               exit 1
             fi
             echo "Mirror complete."
@@ -144,12 +156,21 @@ stages:
             API="https://api.github.com/repos/$(githubRepo)"
             AUTH="Authorization: Bearer $(GITHUB-SDK-MIRROR-TOKEN)"
 
-            if curl -sf -H "$AUTH" "$API/releases/tags/$TAG" >/dev/null 2>&1; then
-              echo "Release $TAG already exists - nothing to publish."
-              exit 0
+            # "Already exists" is not on its own good enough to report success. A release
+            # created by a run that then failed its upload has no asset, and an early exit here
+            # would report green forever while nobody could download anything - the exact failure
+            # the verification at the end of this step exists to catch, skipped by the shortcut
+            # above it. Praxsuite-SDK-Lua has a stale 0.1 tag in that state.
+            if curl -sSf -o /tmp/existing.json -H "$AUTH" "$API/releases/tags/$TAG" 2>/dev/null; then
+              if grep -q '"state": *"uploaded"' /tmp/existing.json; then
+                echo "Release $TAG already exists with an asset attached - nothing to publish."
+                exit 0
+              fi
+              echo "##vso[task.logissue type=error]Release $TAG exists but has no asset attached. A previous run created it and failed to upload. Delete the release (or attach the asset by hand) and re-run."
+              exit 1
             fi
 
-            RELEASE=$(curl -sf -X POST -H "$AUTH" "$API/releases"               -d "{\"tag_name\":\"$TAG\",\"name\":\"Praxsuite SDK for TypeScript $(pkgVersion)\",\"body\":\"Install: npm install @praxsuite/sdk  --  see CHANGELOG.md\",\"draft\":false,\"prerelease\":false}")
+            RELEASE=$(curl -sSf -X POST -H "$AUTH" "$API/releases"               -d "{\"tag_name\":\"$TAG\",\"name\":\"Praxsuite SDK for TypeScript $(pkgVersion)\",\"body\":\"Install: npm install @praxsuite/sdk  --  see CHANGELOG.md\",\"draft\":false,\"prerelease\":false}")
 
             RELEASE_ID=$(echo "$RELEASE" | grep -o '"id": *[0-9]*' | head -1 | tr -dc '0-9')
             if [ -z "$RELEASE_ID" ]; then
@@ -158,11 +179,11 @@ stages:
             fi
             TGZ=$(ls "$(Build.ArtifactStagingDirectory)/package/"*.tgz | head -1)
 
-            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/gzip"               --data-binary @"$TGZ"               "https://uploads.github.com/repos/$(githubRepo)/releases/$RELEASE_ID/assets?name=${TGZ##*/}"
+            curl -sSf -X POST -H "$AUTH" -H "Content-Type: application/gzip"               --data-binary @"$TGZ"               "https://uploads.github.com/repos/$(githubRepo)/releases/$RELEASE_ID/assets?name=${TGZ##*/}"
 
             # Verify rather than trust: assert the asset is actually attached. The first
             # release cut by this pipeline reported success while uploading nothing.
-            ASSETS=$(curl -sf -H "$AUTH" "$API/releases/tags/$TAG" | grep -c '"state": *"uploaded"' || true)
+            ASSETS=$(curl -sSf -H "$AUTH" "$API/releases/tags/$TAG" | grep -c '"state": *"uploaded"' || true)
             if [ "$ASSETS" -lt 1 ]; then
               echo "##vso[task.logissue type=error]Release $TAG was created but no asset attached. Check the upload URL and the asset name."
               exit 1
