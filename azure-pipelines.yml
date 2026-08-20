@@ -25,9 +25,7 @@ pr:
       - development
 
 pool:
-  name: Tesseract-BuildPool
-  demands:
-    - Agent.OS -equals Linux
+  name: tesseract-buildpool
 
 variables:
   buildConfiguration: 'Release'
@@ -95,105 +93,68 @@ stages:
 
         # package.json is the single source of truth for the release tag, so a release can
         # never silently disagree with the version consumers actually install.
-        - powershell: |
-            $pkg = Get-Content package.json -Raw | ConvertFrom-Json
-            $version = $pkg.version
-            if (-not $version) {
-              Write-Host "##vso[task.logissue type=error]package.json has no version field."
-              exit 1
-            }
-            Write-Host "Package version: $version"
-            Write-Host "##vso[task.setvariable variable=pkgVersion]$version"
-          displayName: 'Read package version'
-
-        # UPM consumes a plain npm tarball, so npm pack IS the packaging step - a source-only
-        # package needs no Unity build.
         - script: |
             set -e
-            npm ci
-            npm run build
+            VERSION=$(node -p "require('./package.json').version")
+            if [ -z "$VERSION" ]; then
+              echo "##vso[task.logissue type=error]package.json has no version field."
+              exit 1
+            fi
+            echo "Package version: $VERSION"
+            echo "##vso[task.setvariable variable=pkgVersion]$VERSION"
+          displayName: 'Read package version'
+
+        - script: |
+            set -e
             npm pack
             mkdir -p "$(Build.ArtifactStagingDirectory)/package"
             mv ./*.tgz "$(Build.ArtifactStagingDirectory)/package/"
             ls -la "$(Build.ArtifactStagingDirectory)/package/"
-          displayName: 'Pack npm tarball'
+          displayName: 'Pack tarball'
 
         - task: PublishBuildArtifacts@1
           displayName: 'Publish tarball artifact'
           inputs:
             PathtoPublish: '$(Build.ArtifactStagingDirectory)/package'
-            ArtifactName: 'npm-package'
+            ArtifactName: 'package'
 
-        # Mirror to the public repo. --force-with-lease rather than --force: if someone pushed
-        # to GitHub directly, this fails loudly instead of destroying their commit.
-        - powershell: |
-            $token = '$(GITHUB-SDK-MIRROR-TOKEN)'
-            $repo  = '$(githubRepo)'
-
+        # --force-with-lease, not --force: if someone pushed to GitHub directly, fail loudly
+        # rather than destroy their commit.
+        - script: |
+            set -e
             git config user.email "ci@tesseractsoftwares.com"
             git config user.name  "Tesseract CI"
 
-            git remote remove github 2>$null
-            git remote add github "https://x-access-token:$token@github.com/$repo.git"
+            git remote remove github 2>/dev/null || true
+            git remote add github "https://x-access-token:$(GITHUB-SDK-MIRROR-TOKEN)@github.com/$(githubRepo).git"
+            git fetch github master || true
 
-            # Needed for --force-with-lease to have a baseline to compare against.
-            git fetch github master 2>$null
-
-            Write-Host "Mirroring master to github.com/$repo"
-            git push github HEAD:refs/heads/master --force-with-lease
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "##vso[task.logissue type=error]Mirror push rejected: GitHub has commits this repo does not. Reconcile them rather than forcing."
+            echo "Mirroring master to github.com/$(githubRepo)"
+            if ! git push github HEAD:refs/heads/master --force-with-lease; then
+              echo "##vso[task.logissue type=error]Mirror push rejected: GitHub has commits this repo does not. Reconcile them rather than forcing."
               exit 1
-            }
-
-            Write-Host "Mirror complete."
+            fi
+            echo "Mirror complete."
           displayName: 'Mirror source to GitHub'
 
-        # Tag and release, but only when this version has not been released before, so
-        # re-running a build is harmless rather than a failure.
-        - powershell: |
-            $token   = '$(GITHUB-SDK-MIRROR-TOKEN)'
-            $repo    = '$(githubRepo)'
-            $version = '$(pkgVersion)'
-            $tag     = "v$version"
+        # Idempotent: an existing tag is a no-op, so re-running a build never fails.
+        - script: |
+            set -e
+            TAG="v$(pkgVersion)"
+            API="https://api.github.com/repos/$(githubRepo)"
+            AUTH="Authorization: Bearer $(GITHUB-SDK-MIRROR-TOKEN)"
 
-            $headers = @{
-              Authorization = "Bearer $token"
-              Accept        = 'application/vnd.github+json'
-              'User-Agent'  = 'tesseract-ci'
-            }
-
-            $existing = $null
-            try {
-              $existing = Invoke-RestMethod -Headers $headers `
-                -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
-            } catch { }
-
-            if ($existing) {
-              Write-Host "Release $tag already exists - nothing to publish."
+            if curl -sf -H "$AUTH" "$API/releases/tags/$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG already exists - nothing to publish."
               exit 0
-            }
+            fi
 
-            $notes = "Install in Unity via Package Manager -> Add package from git URL:`n`n" +
-                     "    https://github.com/$repo.git`n`n" +
-                     "See CHANGELOG.md for what changed."
+            RELEASE=$(curl -sf -X POST -H "$AUTH" "$API/releases"               -d "{\"tag_name\":\"$TAG\",\"name\":\"Praxsuite SDK for TypeScript $(pkgVersion)\",\"body\":\"Install: npm install @praxsuite/sdk  --  see CHANGELOG.md\",\"draft\":false,\"prerelease\":false}")
 
-            $body = @{
-              tag_name   = $tag
-              name       = "Praxsuite SDK for TypeScript $version"
-              body       = $notes
-              draft      = $false
-              prerelease = $false
-            } | ConvertTo-Json
+            RELEASE_ID=$(echo "$RELEASE" | head -5 | grep -m1 '"id"' | sed 's/[^0-9]//g')
+            TGZ=$(ls "$(Build.ArtifactStagingDirectory)/package/"*.tgz | head -1)
 
-            $release = Invoke-RestMethod -Method Post -Headers $headers `
-              -Uri "https://api.github.com/repos/$repo/releases" -Body $body -ContentType 'application/json'
+            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/gzip"               --data-binary @"$TGZ"               "https://uploads.github.com/repos/$(githubRepo)/releases/$RELEASE_ID/assets?name=$(basename $TGZ)" >/dev/null
 
-            $tgz = Get-ChildItem '$(Build.ArtifactStagingDirectory)/package' -Filter '*.tgz' | Select-Object -First 1
-            $uploadUrl = "https://uploads.github.com/repos/$repo/releases/$($release.id)/assets?name=$($tgz.Name)"
-
-            Invoke-RestMethod -Method Post -Headers $headers -Uri $uploadUrl `
-              -InFile $tgz.FullName -ContentType 'application/gzip' | Out-Null
-
-            Write-Host "Published release $tag with $($tgz.Name)"
+            echo "Published release $TAG"
           displayName: 'Cut GitHub release'
