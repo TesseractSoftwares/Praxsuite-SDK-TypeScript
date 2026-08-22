@@ -5,3 +5,6 @@ dist-test/
 .env
 .env.*
 *.log
+
+# Written by CI to authenticate the npm publish; never commit it.
+.npmrc

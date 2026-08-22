@@ -3,6 +3,30 @@
 All notable changes to the Praxsuite SDK for TypeScript.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-08-22
+
+No API changes. This release exists because the 1.0.0 artifact was empty.
+
+### Fixed
+
+- **The published 1.0.0 tarball contained no code.** The publish stage is a fresh checkout, and it
+  ran `npm pack` without `npm ci && npm run build` first - so `dist/` did not exist, and because
+  `package.json` lists `dist` under `files`, npm packed a missing directory without complaining.
+  The release asset was 7 KB of README, LICENSE, SECURITY and package.json. Every gate passed,
+  because each one checked that an artifact existed rather than that it was usable.
+
+  The publish stage now builds, and asserts the tarball carries at least five `.js` and five
+  `.d.ts` files before anything is uploaded. The npm step re-reads `dist.unpackedSize` from the
+  registry afterwards and fails if it looks empty.
+
+- `publishConfig.access` is now `public`. A scoped package publishes as restricted by default,
+  which a free organisation cannot host - it would have failed with a 402 that reads like a
+  billing problem rather than a configuration one.
+
+### Added
+
+- Published to npm as `@praxsuite/sdk`.
+
 ## [1.0.0] - 2026-08-19
 
 First release.

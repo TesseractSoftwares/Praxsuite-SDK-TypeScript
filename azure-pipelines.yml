@@ -82,12 +82,17 @@ stages:
           fetchDepth: 0
           persistCredentials: true
 
+        - task: NodeTool@0
+          displayName: 'Install Node'
+          inputs:
+            versionSpec: '22.x'
+
         - task: AzureKeyVault@2
-          displayName: 'Read GitHub token'
+          displayName: 'Read publish secrets'
           inputs:
             azureSubscription: 'sc-acr-push-core-prod'
             KeyVaultName: 'prax-cicd-kv'
-            SecretsFilter: 'GITHUB-SDK-MIRROR-TOKEN'
+            SecretsFilter: 'GITHUB-SDK-MIRROR-TOKEN,NPM-PUBLISH-TOKEN'
             RunAsPreJob: false
 
         # package.json is the single source of truth for the release tag, so a release can
@@ -103,12 +108,41 @@ stages:
             echo "##vso[task.setvariable variable=pkgVersion]$VERSION"
           displayName: 'Read package version'
 
+        # The build MUST happen here. This stage is a fresh checkout with no node_modules and no
+        # dist/, and package.json's "files" lists dist - so npm pack silently produced a tarball
+        # containing only README, LICENSE, SECURITY and package.json. The v1.0.0 release asset
+        # shipped exactly that: 7 KB with no code in it, and the build stayed green because a
+        # missing directory is not an error to npm pack.
+        - script: |
+            set -e
+            npm ci
+            npm run build
+            test -f dist/index.js || {
+              echo "##vso[task.logissue type=error]dist/index.js is missing after the build."
+              exit 1
+            }
+          displayName: 'Install and build'
+
         - script: |
             set -e
             npm pack
             mkdir -p "$(Build.ArtifactStagingDirectory)/package"
             mv ./*.tgz "$(Build.ArtifactStagingDirectory)/package/"
+            TGZ=$(ls "$(Build.ArtifactStagingDirectory)/package/"*.tgz | head -1)
             ls -la "$(Build.ArtifactStagingDirectory)/package/"
+
+            # Assert the tarball actually CONTAINS the library. Checking that an artifact exists
+            # is not the same as checking it is usable - the empty v1.0.0 tarball passed every
+            # other gate in this pipeline.
+            JS=$(tar -tzf "$TGZ" | grep -c 'package/dist/.*\.js$' || true)
+            DTS=$(tar -tzf "$TGZ" | grep -c 'package/dist/.*\.d\.ts$' || true)
+            echo "Tarball carries $JS .js and $DTS .d.ts files."
+            if [ "$JS" -lt 5 ] || [ "$DTS" -lt 5 ]; then
+              echo "##vso[task.logissue type=error]The tarball does not contain the built library. Contents:"
+              tar -tzf "$TGZ"
+              exit 1
+            fi
+            echo "##vso[task.setvariable variable=pkgTarball]$TGZ"
           displayName: 'Pack tarball'
 
         - task: PublishBuildArtifacts@1
@@ -190,3 +224,41 @@ stages:
 
             echo "Published release $TAG with $ASSETS asset(s)"
           displayName: 'Cut GitHub release'
+
+        # Publishing to npm comes LAST, deliberately. It is the only step here that cannot be
+        # undone: npm forbids re-publishing a version even after unpublishing it, so a bad publish
+        # burns the version number permanently. Everything that can fail should have failed by now.
+        #
+        # No --provenance: it needs OIDC from GitHub Actions or GitLab, which Azure DevOps cannot
+        # supply. That is also why this uses a granular token rather than Trusted Publishing.
+        - script: |
+            set -e
+            PKG="@praxsuite/sdk"
+
+            # Idempotent: a re-run of the same commit must not fail.
+            if npm view "$PKG@$(pkgVersion)" version >/dev/null 2>&1; then
+              echo "$PKG@$(pkgVersion) is already on the registry - nothing to publish."
+              exit 0
+            fi
+
+            # Auth via a workspace-local .npmrc rather than `npm login`. It is gitignored, and
+            # removed in the trap below whatever happens.
+            trap 'rm -f "$(Build.SourcesDirectory)/.npmrc"' EXIT
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$(NPM-PUBLISH-TOKEN)" > "$(Build.SourcesDirectory)/.npmrc"
+
+            # --access public because a scoped package defaults to restricted, and a free org
+            # cannot host a private package - it would fail with a 402 that reads like a billing
+            # problem rather than a config one.
+            npm publish "$(pkgTarball)" --access public
+
+            # Verify from the registry rather than trusting the exit code, and confirm the
+            # published tarball is the one carrying the build.
+            sleep 5
+            PUBLISHED=$(npm view "$PKG@$(pkgVersion)" dist.unpackedSize 2>/dev/null || echo 0)
+            echo "Registry reports unpackedSize=$PUBLISHED for $PKG@$(pkgVersion)"
+            if [ "${PUBLISHED:-0}" -lt 20000 ]; then
+              echo "##vso[task.logissue type=error]$PKG@$(pkgVersion) published but looks empty (unpackedSize=$PUBLISHED). The v1.0.0 release asset failed exactly this way."
+              exit 1
+            fi
+            echo "Published $PKG@$(pkgVersion) to npm."
+          displayName: 'Publish to npm'
