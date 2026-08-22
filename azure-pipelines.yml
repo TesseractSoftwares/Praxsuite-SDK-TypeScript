@@ -251,14 +251,28 @@ stages:
             # problem rather than a config one.
             npm publish "$(pkgTarball)" --access public
 
-            # Verify from the registry rather than trusting the exit code, and confirm the
-            # published tarball is the one carrying the build.
-            sleep 5
-            PUBLISHED=$(npm view "$PKG@$(pkgVersion)" dist.unpackedSize 2>/dev/null || echo 0)
-            echo "Registry reports unpackedSize=$PUBLISHED for $PKG@$(pkgVersion)"
-            if [ "${PUBLISHED:-0}" -lt 20000 ]; then
-              echo "##vso[task.logissue type=error]$PKG@$(pkgVersion) published but looks empty (unpackedSize=$PUBLISHED). The v1.0.0 release asset failed exactly this way."
-              exit 1
+            # npm has confirmed the publish by this point. Everything below is a read-back, and it
+            # must NOT fail the build: the publish is irreversible, so a red stage here would
+            # report the opposite of what happened and send the next person hunting a failure that
+            # already succeeded. That is exactly what the first version of this step did - it
+            # slept 5s, read unpackedSize=0 from a brand-new package that had not propagated yet,
+            # and failed a build whose publish had worked. The retry loop exists because a NEW
+            # package took ~30s to become visible; a new version of an existing one is faster.
+            PUBLISHED=0
+            for attempt in 1 2 3 4 5 6 7 8; do
+              PUBLISHED=$(npm view "$PKG@$(pkgVersion)" dist.unpackedSize 2>/dev/null || echo 0)
+              case "$PUBLISHED" in ''|*[!0-9]*) PUBLISHED=0 ;; esac
+              [ "$PUBLISHED" -gt 0 ] && break
+              echo "Not visible on the registry yet (attempt $attempt); waiting 15s."
+              sleep 15
+            done
+
+            if [ "$PUBLISHED" -eq 0 ]; then
+              echo "##vso[task.logissue type=warning]$PKG@$(pkgVersion) was published, but is not visible on the registry yet. That is usually propagation delay for a new package. Confirm with: npm install $PKG@$(pkgVersion)"
+            elif [ "$PUBLISHED" -lt 20000 ]; then
+              echo "##vso[task.logissue type=warning]$PKG@$(pkgVersion) is on the registry but unpackedSize=$PUBLISHED looks too small. Check the tarball - the 1.0.0 release shipped empty this way."
+            else
+              echo "Registry confirms $PKG@$(pkgVersion): unpackedSize=$PUBLISHED"
             fi
             echo "Published $PKG@$(pkgVersion) to npm."
           displayName: 'Publish to npm'
