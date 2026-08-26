@@ -224,3 +224,45 @@ describe('auth', () => {
     assert.equal(prax.auth.isSignedIn, false, 'a failed revoke must not leave the user looking signed in');
   });
 });
+
+describe('the default fetch keeps a usable receiver', () => {
+  // The browser's fetch refuses to run when its receiver is anything but the global object: it
+  // throws "Illegal invocation" before the request leaves. This SDK used to call it as
+  // `opts.fetchImpl(...)`, which handed it the transport object, so every browser app failed on
+  // its first request.
+  //
+  // It shipped because nothing exercised that line. Every other test here injects a `fetch`
+  // option, which takes the other branch of `options.fetch ?? globalThis.fetch` - so the default
+  // that real browser apps use was never run. Node's own fetch ignores its receiver, so even
+  // running it would not have thrown.
+  //
+  // Hence this test asserts the mechanism rather than an error: whatever receiver fetch gets,
+  // it must not be a foreign object.
+
+  test('fetch is not called as a method of the transport object', async () => {
+    const original = globalThis.fetch;
+    let receiver: unknown = '<never called>';
+
+    globalThis.fetch = function (this: unknown) {
+      receiver = this;
+      return Promise.resolve(
+        new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      );
+    } as unknown as typeof fetch;
+
+    try {
+      // No `fetch` option on purpose - the default branch is the whole point of this test.
+      const prax = createClient({ workspaceId: WS, publishableKey: KEY, maxRetries: 0 });
+      await prax.endpoints.call('some-endpoint', {});
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    assert.ok(
+      receiver === undefined || receiver === globalThis,
+      'fetch was called with a foreign receiver (' +
+      Object.prototype.toString.call(receiver) +
+      '); a browser rejects that with "Illegal invocation".'
+    );
+  });
+});

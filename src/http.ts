@@ -58,6 +58,14 @@ export async function send(
   const attempts = opts.maxRetries + 1;
   let refreshAttempted = false;
 
+  // Pulled off `opts` so the call below is a plain function call. Calling it as
+  // `opts.fetchImpl(...)` would hand fetch the transport object as its receiver, and the
+  // browser's fetch rejects a foreign receiver with "Illegal invocation" before the request
+  // ever leaves. Node's fetch does not check the receiver, which is why an app that passed
+  // its own `fetch` option - as every test here does - never saw it, and only a real browser
+  // using the default `globalThis.fetch` did.
+  const { fetchImpl } = opts;
+
   for (let attempt = 1; ; attempt++) {
     const credential = await resolveCredential(authMode);
 
@@ -80,7 +88,7 @@ export async function send(
 
     let response: Response;
     try {
-      response = await opts.fetchImpl(url, {
+      response = await fetchImpl(url, {
         method,
         headers,
         body: payload,
