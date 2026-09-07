@@ -92,7 +92,7 @@ stages:
           inputs:
             azureSubscription: 'sc-acr-push-core-prod'
             KeyVaultName: 'prax-cicd-kv'
-            SecretsFilter: 'GITHUB-SDK-MIRROR-TOKEN,NPM-PUBLISH-TOKEN'
+            SecretsFilter: 'GITHUB-SDK-MIRROR-TOKEN,NPM-PUBLISH-TOKEN,PRAXSPACE-INGEST-URL'
             RunAsPreJob: false
 
         # package.json is the single source of truth for the release tag, so a release can
@@ -276,3 +276,58 @@ stages:
             fi
             echo "Published $PKG@$(pkgVersion) to npm."
           displayName: 'Publish to npm'
+
+        # Tells the community what shipped, as a card in the PraxSpace #open-source channel.
+        #
+        # NEVER fails the build, for the same reason the registry check above does not: by the
+        # time this runs the package is already published and irreversible, so a red stage here
+        # would report the opposite of what happened. A missing card is a missing card.
+        #
+        # The ingest URL comes from Key Vault, not from this file. This repository is
+        # mirrored to public GitHub and the endpoint takes no credential, so committing the URL
+        # would hand anyone the ability to post cards to our community roadmap.
+        - script: |
+            set +e
+
+            if [ -z "$PRAXSPACE_INGEST_URL" ]; then
+              echo "PRAXSPACE_INGEST_URL is not set; skipping the release card."
+              exit 0
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+              echo "python3 is not on this agent; skipping the release card."
+              exit 0
+            fi
+
+            # The card is DERIVED from CHANGELOG.md. A feed written by hand drifts from the
+            # changelog within a release or two and then quietly lies about what shipped.
+            awk -v ver="$(pkgVersion)" \
+              'index($0,"## ["ver"]")==1||index($0,"## "ver)==1{grab=1;next} grab&&index($0,"## ")==1{exit} grab{print}' \
+              CHANGELOG.md > /tmp/release-notes.txt
+
+            NOTES_FILE=/tmp/release-notes.txt \
+            SOURCE_KEY="Praxsuite-SDK-TypeScript" \
+            PACKAGE="@praxsuite/sdk" \
+            VERSION="$(pkgVersion)" \
+            INSTALL="npm install @praxsuite/sdk@$(pkgVersion)" \
+            RELEASE_URL="https://github.com/$(githubRepo)/releases/tag/v$(pkgVersion)" \
+              python3 ci/announce-release.py > /tmp/release-card.json
+
+            if [ ! -s /tmp/release-card.json ]; then
+              echo "##vso[task.logissue type=warning]Could not build the release card; the release itself is fine."
+              exit 0
+            fi
+
+            CODE=$(curl -sS -o /tmp/ingest.json -w '%{http_code}' -X POST \
+              -H 'Content-Type: application/json' \
+              --data @/tmp/release-card.json \
+              "$PRAXSPACE_INGEST_URL")
+
+            if [ "$CODE" = "200" ]; then
+              echo "Announced $(pkgVersion) in PraxSpace: $(cat /tmp/ingest.json)"
+            else
+              echo "##vso[task.logissue type=warning]PraxSpace ingest answered HTTP $CODE. The release is published; only the card is missing."
+              cat /tmp/ingest.json 2>/dev/null; echo
+            fi
+          displayName: 'Announce the release in PraxSpace'
+          env:
+            PRAXSPACE_INGEST_URL: $(PRAXSPACE-INGEST-URL)
