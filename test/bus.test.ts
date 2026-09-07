@@ -14,7 +14,7 @@ import type { PraxSession } from '../src/storage.js';
  * least once in a real SDK or was measured against the live hub on 2026-09-07.
  */
 
-const WS = '1eb92f32-d628-4656-8c64-cd0d43c9869d';
+const WS = '00000000-0000-4000-8000-0000000000ff';
 const KEY = 'pk_live_' + 'fedcba9876543210fedcba9876543210';
 const USER = '729531eb-98ca-4cfd-bb79-452dbe177ca5';
 

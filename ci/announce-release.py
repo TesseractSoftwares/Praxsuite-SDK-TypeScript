@@ -1,4 +1,4 @@
-"""Builds the release card the pipeline posts to PraxSpace.
+"""Builds the release card the pipeline posts to the PraxSpace Lanzamientos channel.
 
 Derived from CHANGELOG.md, never hand-written: a feed somebody maintains by hand drifts from the
 changelog within a release or two and then quietly lies about what shipped.
@@ -6,6 +6,9 @@ changelog within a release or two and then quietly lies about what shipped.
 A card is something you SCAN, so only the headline of each bullet survives - the paragraph under it
 belongs in the changelog the card links to. Everything is read from the environment so the pipeline
 step needs no heredoc, which is what broke a YAML block scalar in a sibling pipeline.
+
+Writes the JSON to stdout with NO trailing newline. The pipeline signs the exact bytes it sends, so
+anything added here has to be added there too.
 """
 
 import json
@@ -72,25 +75,17 @@ if len(summary) > 900:
 package = os.environ["PACKAGE"]
 version = os.environ["VERSION"]
 install = os.environ.get("INSTALL", "").strip()
-source_key = os.environ["SOURCE_KEY"]
 
+# The title doubles as the dedupe key on the receiving side - package plus version is already
+# unique per release - so it must stay stable across a pipeline re-run.
 title = "{} {}".format(package, version)
 if is_breaking:
     title += "  - cambio incompatible"
 
-body_parts = [part for part in (install, summary) if part]
-
 card = {
-    "sourceKey": source_key,
-    "type": "release",
     "title": title,
-    "body": "\n\n".join(body_parts),
-    "author": "Praxsuite",
-    "ref": "v" + version,
+    "body": "\n\n".join(part for part in (install, summary) if part),
     "url": os.environ.get("RELEASE_URL", ""),
-    # Dedupe key. A re-run of the same pipeline must not post the card twice, and the ingest
-    # endpoint drops anything whose External Id it has already seen.
-    "externalId": "release-{}-{}".format(source_key.lower(), version),
 }
 
 sys.stdout.write(json.dumps(card, ensure_ascii=False))
