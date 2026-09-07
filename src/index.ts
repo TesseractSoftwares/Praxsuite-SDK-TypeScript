@@ -1,4 +1,5 @@
 import { PraxAuth } from './auth.js';
+import { PraxBus, type PraxBusOptions } from './bus.js';
 import { PraxClient, type PraxOptions } from './client.js';
 import { PraxData } from './data.js';
 import { PraxEndpoints } from './endpoints.js';
@@ -19,8 +20,21 @@ export {
 } from './storage.js';
 export { PraxClient, type PraxOptions } from './client.js';
 export { PraxQuery, PraxData } from './data.js';
-export { PraxAuth, type PraxUser, type PraxAuthResult, type PraxWorkspaceConfig } from './auth.js';
+export {
+  PraxAuth,
+  type PraxUser, type PraxAuthResult, type PraxWorkspaceConfig,
+  type PraxOidcProvider, type PraxOidcStart,
+} from './auth.js';
 export { PraxEndpoints } from './endpoints.js';
+export {
+  PraxBus, PraxChannel, PraxTopic,
+  type BusState, type PraxBusOptions, type Unsubscribe,
+} from './bus.js';
+export {
+  normalizeBusKey, requireValidBusKey, splitFrames, parseBusResult, describeBusError,
+  BUS_PATH, HANDSHAKE_FRAME, RS,
+  type BusEvent, type BusPeerState, type BusResult,
+} from './buswire.js';
 export { PraxSchema, type PraxTableInfo, type PraxColumnInfo } from './schema.js';
 
 /**
@@ -45,6 +59,11 @@ export interface Praxsuite {
   data: PraxData;
   /** Gateway endpoints - the server-authoritative path. */
   endpoints: PraxEndpoints;
+  /**
+   * The Event Bus: ephemeral realtime between connected clients. Cursors, avatars, typing
+   * indicators, multiplayer state. Nothing is persisted; a signed-in end user is required.
+   */
+  bus: PraxBus;
   /** Table name to id mapping. */
   schema: PraxSchema;
   /** The underlying client - configuration, session, and the raw request method. */
@@ -64,7 +83,7 @@ export interface Praxsuite {
  * where you can - auth still works without them - and let signed-in users get their access from a
  * role instead. See SECURITY.md.
  */
-export function createClient(options: PraxOptions): Praxsuite {
+export function createClient(options: PraxOptions & { bus?: PraxBusOptions }): Praxsuite {
   const client = new PraxClient(options);
   const schema = new PraxSchema(client);
   return {
@@ -73,5 +92,6 @@ export function createClient(options: PraxOptions): Praxsuite {
     auth: new PraxAuth(client),
     data: new PraxData(client, schema),
     endpoints: new PraxEndpoints(client),
+    bus: new PraxBus(client, options.bus ?? {}),
   };
 }
