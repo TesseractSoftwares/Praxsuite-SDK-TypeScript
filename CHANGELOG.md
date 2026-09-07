@@ -3,6 +3,36 @@
 All notable changes to the Praxsuite SDK for TypeScript.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-07
+
+### Added
+
+- **`prax.bus` - the Event Bus.** Ephemeral realtime between connected clients: cursors, avatars,
+  typing indicators, multiplayer state. `prax.bus.topic('office').channel('hq')` gives a channel
+  with `join()`, `publish()`, `leave()` and `on()`, plus presence and the caller's own
+  `prax.bus.self` bus. Reconnects with backoff and re-joins every channel, because SignalR group
+  membership does not survive a reconnect and a client that only reconnects is connected, in no
+  groups, and silent.
+
+  The SDK speaks SignalR's JSON protocol directly rather than depending on `@microsoft/signalr`:
+  the surface is four message types wide, this package ships with zero dependencies, and the
+  official client defaults `withCredentials` to true - which is exactly the setting that makes the
+  handshake fail against our gateway, since the CORS spec forbids answering a credentialed request
+  with the wildcard origin the front door sends.
+
+- **`auth.startOidcLogin`**, which returns the `state` alongside the URL instead of making callers
+  re-parse it out of the query string, and **`getWorkspaceConfig().providers`**, which carries each
+  provider's display name so a button can be labelled.
+
+### Fixed
+
+- **`completeOidcLogin` could never succeed.** It sent `{ code, state }`, and the gateway requires
+  `providerSlug` and `redirectUri` as well: the one-time state is scoped per provider, so omitting
+  the slug makes every callback look expired, and the redirect URI is compared against the value
+  configured for that provider. The signature is now
+  `completeOidcLogin(providerSlug, code, state, redirectUri)`. This is a breaking change to a call
+  that returned 401 or 400 every time it was made.
+
 ## [1.0.1] - 2026-08-22
 
 No API changes. This release exists because the 1.0.0 artifact was empty.

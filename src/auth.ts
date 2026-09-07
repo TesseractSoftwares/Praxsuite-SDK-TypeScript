@@ -39,7 +39,39 @@ export interface PraxWorkspaceConfig {
   termsUrl?: string;
   privacyUrl?: string;
   enabledRegisterFields: string[];
+  /** Configured provider slugs. Kept for compatibility; `providers` carries the label too. */
   oidcProviders: string[];
+  /**
+   * External identity providers configured for this workspace, with the label to put on the
+   * button.
+   *
+   * This is the authoritative list. `authPageConfig.enabledSocialProviders`, which the portal's
+   * auth-page designer writes, is a different thing: a provider named there but absent here is
+   * not configured, and its button is a dead end.
+   */
+  providers: PraxOidcProvider[];
+}
+
+/** One external identity provider the workspace has configured. */
+export interface PraxOidcProvider {
+  /** The value to pass to `startOidcLogin`. */
+  slug: string;
+  /** What to put on the button. */
+  displayName: string;
+}
+
+/** What `startOidcLogin` returns: where to send the user, and the CSRF token to bring back. */
+export interface PraxOidcStart {
+  /** Open this in a browser or webview. */
+  authorizationUrl: string;
+  /**
+   * One-time CSRF value the gateway issued and will consume on the callback.
+   *
+   * The provider echoes it back on the redirect, so you can normally read it from there - but it
+   * is returned here so a caller never has to parse it out of a URL, and so the two can be
+   * compared before the round trip.
+   */
+  state: string;
 }
 
 function toUser(session: PraxSession | null): PraxUser | null {
@@ -138,6 +170,14 @@ export class PraxAuth {
       oidcProviders: providers
         .map((p) => (typeof p === 'string' ? p : str((p as Record<string, unknown>)['slug'])))
         .filter((s): s is string => !!s),
+      providers: providers
+        .map((p) => {
+          if (typeof p === 'string') return { slug: p, displayName: p };
+          const o = p as Record<string, unknown>;
+          const slug = str(o['slug']) ?? '';
+          return { slug, displayName: str(o['displayName']) ?? slug };
+        })
+        .filter((p) => !!p.slug),
     };
   }
 
@@ -254,8 +294,25 @@ export class PraxAuth {
     await this.post('resend-confirmation', { email: required(email, 'email') }, signal);
   }
 
-  /** Returns the provider URL to open for a social or enterprise sign-in. */
-  async getOidcUrl(providerSlug: string, signal?: AbortSignal): Promise<string> {
+  /**
+   * Starts a sign-in with an external identity provider.
+   *
+   * Returns where to send the user and the one-time `state` the gateway issued. Open the URL in a
+   * browser or webview; the provider sends the user back to the redirect URI configured for that
+   * provider in the portal, with `code` and `state` on the query string. Hand all of it to
+   * {@link completeOidcLogin}.
+   *
+   * ```ts
+   * const { authorizationUrl, state } = await prax.auth.startOidcLogin('tesseract');
+   * sessionStorage.setItem('prax_oidc_state', state);
+   * location.href = authorizationUrl;
+   * ```
+   *
+   * Slugs come from {@link getWorkspaceConfig}'s `providers`. There is no way to pass a provider's
+   * own id_token instead: the gateway implements the authorization-code flow and nothing else, so
+   * a native Google or Apple button still has to make this browser hop.
+   */
+  async startOidcLogin(providerSlug: string, signal?: AbortSignal): Promise<PraxOidcStart> {
     const slug = encodeURIComponent(required(providerSlug, 'providerSlug'));
     const body = await this.client.request(
       'GET', routes.auth(this.client.baseUrl, this.client.workspaceId, 'oidc/' + slug), null, 'apiKey', signal
@@ -267,13 +324,48 @@ export class PraxAuth {
         'The gateway returned no authorization URL for provider "' + providerSlug + '". Check that ' +
         'it is configured and enabled for this workspace.');
     }
-    return url;
+    return { authorizationUrl: url, state: typeof payload['state'] === 'string' ? payload['state'] : '' };
   }
 
-  /** Completes an OIDC sign-in by exchanging the provider's code for a session. */
-  async completeOidcLogin(code: string, state?: string, signal?: AbortSignal): Promise<PraxAuthResult> {
-    const payload: Record<string, unknown> = { code: required(code, 'code') };
-    if (state) payload['state'] = state;
+  /**
+   * @deprecated Use {@link startOidcLogin}, which also returns the `state` the callback needs.
+   */
+  async getOidcUrl(providerSlug: string, signal?: AbortSignal): Promise<string> {
+    return (await this.startOidcLogin(providerSlug, signal)).authorizationUrl;
+  }
+
+  /**
+   * Completes an external sign-in, exchanging the provider's code for a Praxsuite session.
+   *
+   * All four values are required by the gateway, and three of them are why this call used to fail:
+   *
+   * - `providerSlug` scopes the one-time state, so omitting it makes every callback look expired.
+   * - `state` is consumed once. Reusing it, or skipping it, is rejected.
+   * - `redirectUri` is compared against the provider's configured value and must match exactly.
+   *   Pass the same string you were redirected to; re-deriving it from `location` is how it ends
+   *   up differing by a trailing slash and failing with a message about the redirect URI that
+   *   nobody can act on.
+   *
+   * On success the session is stored the same way a password login stores it, so refresh, sign-out
+   * and every authenticated call behave identically afterwards.
+   *
+   * An email already registered as a local password account comes back as a 400 rather than a
+   * session - the user's fix is to sign in with their password, so say that rather than "login
+   * failed".
+   */
+  async completeOidcLogin(
+    providerSlug: string,
+    code: string,
+    state: string,
+    redirectUri: string,
+    signal?: AbortSignal
+  ): Promise<PraxAuthResult> {
+    const payload: Record<string, unknown> = {
+      providerSlug: required(providerSlug, 'providerSlug'),
+      code: required(code, 'code'),
+      state: required(state, 'state'),
+      redirectUri: required(redirectUri, 'redirectUri'),
+    };
     return this.completeAuth(await this.post('oidc/callback', payload, signal));
   }
 

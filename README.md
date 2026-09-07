@@ -64,8 +64,100 @@ needs no redeploy.
 | `prax.data` | Queries with filters, OR/AND groups, ordering, paging, relations and aggregates; insert, update, delete, upsert |
 | `prax.endpoints` | Call gateway automations — the server-authoritative path |
 | `prax.schema` | Address tables by name instead of GUID |
+| `prax.bus` | The Event Bus - ephemeral realtime between connected clients |
 
 Everything is typed. Pass a row type to get it back: `prax.data.from<Score>('Scores')`.
+
+---
+
+## The Event Bus
+
+Live cursors, avatars, "user is typing", a multiplayer lobby. State that is *changing*, where
+losing a message is fine because a newer one is 100ms behind it.
+
+```ts
+await prax.auth.login(email, password);   // the bus needs a signed-in user, not the workspace key
+
+const room = prax.bus.topic('office').channel('hq');   // the bus "office:hq"
+
+room.on('move', (e) => moveAvatar(e.fromUserId, e.payload));
+room.onPeerLeft((userId) => removeAvatar(userId));
+
+// join() returns everyone already there, so a late arrival sees the room instead of an
+// empty one until somebody happens to move.
+for (const peer of await room.join()) moveAvatar(peer.userId, peer.payload);
+
+await room.publish('move', { x, y });
+```
+
+**A topic must exist before anyone can join it.** Declare it once in the portal under
+API Gateway / Event Bus (or with the `create_bus_topic` MCP tool) and pick its access rule:
+open to any signed-in user, gated on a role from their token, or gated on a grant on that one bus
+instance. An undeclared topic is refused - which is what stops somebody else's client squatting in
+your namespace.
+
+`prax.bus.self` is the caller's own bus, `user:self`. The server resolves it to your id, so it can
+never address anybody else, and it is how you reach one user across their open tabs.
+
+Three things about it are not obvious and will bite:
+
+- **Nothing is persisted.** No history, no retry, no delivery to somebody who was not connected.
+  The test is one question: *if this is lost, does it matter?* Yes means it belongs in a table via
+  `prax.data`, or in an automation. No, because a newer one is coming, means it belongs here. A
+  chat app uses both: the automation stores the message, the bus makes it appear instantly.
+- **Payloads are hostile.** The bus relays opaque JSON between *users* and parses none of it, so
+  every server-side sanitizer is bypassed. Rendering a payload as HTML is a stored XSS delivered
+  peer to peer. Treat it the way you would treat a URL query string.
+- **You never receive your own event.** Apply your own change locally.
+
+`publish()` does not throw when the bus refuses a frame - a game loop that throws on a rate limit
+is worse than one that skips a frame. Read the result when you care:
+
+```ts
+const r = await room.publish('move', { x, y });
+if (!r.ok) console.debug(r.error);        // e.g. 'rate_limited'
+if (r.recipients === 0) { /* it went out, and nobody was joined */ }
+```
+
+`join()` is the opposite and throws: a publish that does not land is one lost frame, a join that
+does not land means this client is silently absent for the whole session.
+
+Reconnects are handled. The socket comes back with backoff and every channel you still want is
+re-joined, because SignalR group membership does not survive a reconnect - a client that only
+reconnects is connected, in no groups, and looks for all the world like a broken server.
+
+---
+
+## Signing in with an external provider
+
+```ts
+const { providers } = await prax.auth.getWorkspaceConfig();   // [{ slug, displayName }]
+
+const { authorizationUrl, state } = await prax.auth.startOidcLogin('tesseract');
+sessionStorage.setItem('prax_oidc_state', state);
+location.href = authorizationUrl;
+
+// ...back at your redirect URI:
+const params = new URLSearchParams(location.search);
+await prax.auth.completeOidcLogin(
+  'tesseract',
+  params.get('code')!,
+  params.get('state')!,
+  'https://app.example/callback',   // byte-identical to the provider's configured redirect URI
+);
+```
+
+All four arguments are required, and three of them are why an OIDC sign-in fails when it fails:
+the gateway scopes its one-time `state` per provider, consumes it once, and compares `redirectUri`
+against the value configured for that provider. Pass the URI you were actually redirected to
+rather than rebuilding it from `location` - that is how it ends up differing by a trailing slash
+and failing with a message about redirect URIs that nobody can act on.
+
+The session lands in the same store as a password login, so refresh, sign-out and every
+authenticated call behave identically afterwards.
+
+Only the authorization-code flow exists. There is no route that accepts a provider's own
+`id_token`, so a native Google or Apple button still has to make the browser hop.
 
 ---
 
