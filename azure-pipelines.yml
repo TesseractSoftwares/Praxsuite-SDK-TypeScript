@@ -277,24 +277,24 @@ stages:
             echo "Published $PKG@$(pkgVersion) to npm."
           displayName: 'Publish to npm'
 
-        # Tells the community what shipped, as a card in the PraxSpace #open-source channel.
+        # Posts a card to the community's Lanzamientos channel saying what shipped.
         #
-        # NEVER fails the build, for the same reason the registry check above does not: by the
-        # time this runs the package is already published and irreversible, so a red stage here
-        # would report the opposite of what happened. A missing card is a missing card.
+        # NEVER fails the build, for the same reason the registry check above does not: by
+        # the time this runs the package is already published and irreversible, so a red
+        # stage here would report the opposite of what happened.
         #
-        # The ingest URL comes from Key Vault, not from this file. This repository is
-        # mirrored to public GitHub and the endpoint takes no credential, so committing the URL
-        # would hand anyone the ability to post cards to our community roadmap.
+        # The URL and the signing key both come from Key Vault, never from this file. This
+        # repository is mirrored to public GitHub, and the key is what stops anyone posting
+        # cards into the community feed.
         - script: |
             set +e
 
-            if [ -z "$PRAXSPACE_INGEST_URL" ]; then
-              echo "PRAXSPACE_INGEST_URL is not set; skipping the release card."
+            if [ -z "$PRAXSPACE_INGEST_URL" ] || [ -z "$PRAXSPACE_SIGNING_KEY" ]; then
+              echo "PraxSpace ingest is not configured on this pipeline; skipping the card."
               exit 0
             fi
             if ! command -v python3 >/dev/null 2>&1; then
-              echo "python3 is not on this agent; skipping the release card."
+              echo "python3 is not on this agent; skipping the card."
               exit 0
             fi
 
@@ -305,7 +305,6 @@ stages:
               CHANGELOG.md > /tmp/release-notes.txt
 
             NOTES_FILE=/tmp/release-notes.txt \
-            SOURCE_KEY="Praxsuite-SDK-TypeScript" \
             PACKAGE="@praxsuite/sdk" \
             VERSION="$(pkgVersion)" \
             INSTALL="npm install @praxsuite/sdk@$(pkgVersion)" \
@@ -317,13 +316,22 @@ stages:
               exit 0
             fi
 
+            # HMAC-SHA256 over the EXACT bytes that go on the wire. Hence --data-binary
+            # below: curl's --data strips newlines out of a file, so the body sent would not
+            # be the body signed and every card would come back 401.
+            #
+            # The key reaches python through the environment and is never an argument: an
+            # argument is visible in the process list to anything else on the agent.
+            SIGNATURE=$(PRAXSPACE_SIGNING_KEY="$PRAXSPACE_SIGNING_KEY" python3 -c "import hashlib,hmac,os,sys; sys.stdout.write(hmac.new(os.environ['PRAXSPACE_SIGNING_KEY'].encode(), open('/tmp/release-card.json','rb').read(), hashlib.sha256).hexdigest())")
+
             CODE=$(curl -sS -o /tmp/ingest.json -w '%{http_code}' -X POST \
               -H 'Content-Type: application/json' \
-              --data @/tmp/release-card.json \
+              -H "X-Webhook-Signature: sha256=$SIGNATURE" \
+              --data-binary @/tmp/release-card.json \
               "$PRAXSPACE_INGEST_URL")
 
             if [ "$CODE" = "200" ]; then
-              echo "Announced $(pkgVersion) in PraxSpace: $(cat /tmp/ingest.json)"
+              echo "Announced $(pkgVersion): $(cat /tmp/ingest.json)"
             else
               echo "##vso[task.logissue type=warning]PraxSpace ingest answered HTTP $CODE. The release is published; only the card is missing."
               cat /tmp/ingest.json 2>/dev/null; echo
@@ -331,3 +339,4 @@ stages:
           displayName: 'Announce the release in PraxSpace'
           env:
             PRAXSPACE_INGEST_URL: $(PRAXSPACE-INGEST-URL)
+            PRAXSPACE_SIGNING_KEY: $(PRAXSPACE-RELEASE-SIGNING-KEY)

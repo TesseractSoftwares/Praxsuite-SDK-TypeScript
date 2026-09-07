@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { createClient, PraxError, f } from '../src/index.js';
 
-const WS = '1eb92f32-d628-4656-8c64-cd0d43c9869d';
+const WS = '00000000-0000-4000-8000-0000000000ff';
 const KEY = 'pk_live_' + 'fedcba9876543210fedcba9876543210';
 
 /** A fetch stub that records calls and replays scripted responses. */
