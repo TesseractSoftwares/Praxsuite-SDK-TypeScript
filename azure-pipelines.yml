@@ -28,12 +28,13 @@ pool:
 
 variables:
   # Los secretos de publicacion salian de prax-cicd-kv, que vive en la
-  # suscripcion de Azure bloqueada el 2026-09-15. Las lecturas todavia
-  # funcionan, pero si esa suscripcion llega a eliminarse el pipeline se cae.
-  # Este grupo es NATIVO de ADO: no se le agrega gcloud a un pipeline que no lo
-  # necesita para nada mas. Los nombres de variable son identicos a los del
-  # vault, asi que las referencias $(...) de mas abajo no cambian.
-  - group: sdk-publish
+  # suscripcion de Azure bloqueada el 2026-09-15. Ahora vienen de Secret Manager
+  # de GCP, donde los 46 secretos de ese vault ya estaban replicados desde el
+  # 2026-09-09: una sola fuente de verdad, no dos copias que se desincronizan.
+  # El grupo gcp-migration aporta GCP_SA_KEY_B64 para autenticar.
+  - group: gcp-migration
+  - name: gcpProject
+    value: 'praxsuite-prod'
   - name: buildConfiguration
     value: 'Release'
   - name: isMaster
@@ -96,6 +97,13 @@ stages:
           displayName: 'Install Node'
           inputs:
             versionSpec: '22.x'
+
+        - template: .azure/templates/gcp-secrets.yml
+          parameters:
+            secretos:
+              GITHUB-SDK-MIRROR-TOKEN: cicd-github-sdk-mirror-token
+              NPM-PUBLISH-TOKEN: cicd-npm-publish-token
+              PRAXSPACE-INGEST-URL: cicd-praxspace-ingest-url
 
         # package.json is the single source of truth for the release tag, so a release can
         # never silently disagree with the version consumers actually install.
