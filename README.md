@@ -12,6 +12,11 @@ Zero dependencies. One field to configure. Refuses to let a secret key reach cli
 
 ---
 
+## Guides
+
+- [Use Case](https://learn.praxsuite.com/examples/typescript/typescript-sdk-use-case/)
+- [Implementation](https://learn.praxsuite.com/examples/typescript/typescript-sdk-implementation/)
+
 ## Install
 
 ```bash
