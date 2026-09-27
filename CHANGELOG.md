@@ -3,6 +3,30 @@
 All notable changes to the Praxsuite SDK for TypeScript.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-09-27
+
+No API changes. This release exists because no browser app could make a single request.
+
+### Fixed
+
+- **Every browser app failed on its first request with `Illegal invocation`.** The transport held
+  the fetch implementation on an object and called it as a method, `opts.fetchImpl(url, ...)`,
+  which hands `fetch` that object as its receiver. The browser's `fetch` rejects a foreign
+  receiver and throws before the request leaves; after four retries it surfaced as a
+  `NETWORK_ERROR` with status 0 on whatever call ran first - usually the `/auth/config` key
+  discovery or a sign-in - so it read as a network or configuration problem in the app.
+
+  The call site now pulls the implementation off the options first, so it runs as a plain
+  function call. Apps that worked around it by passing their own `fetch` option keep working.
+
+  It shipped because nothing ran that line: every test injects the `fetch` option, which takes
+  the other branch of `options.fetch ?? globalThis.fetch`, and Node's `fetch` ignores its receiver
+  anyway. The regression test asserts the mechanism instead: it swaps in a `globalThis.fetch` that
+  records its receiver, builds a client with no `fetch` option, and fails on 1.1.0.
+
+  This fix was first written for 1.0.2 (2026-08-26) but never merged; 1.1.0 shipped without it.
+  Still uncovered: no test loads the SDK in a real browser.
+
 ## [1.1.0] - 2026-09-07
 
 ### Added
