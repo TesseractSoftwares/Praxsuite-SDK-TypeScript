@@ -27,14 +27,9 @@ pool:
   name: tesseract-buildpool
 
 variables:
-  # Los secretos de publicacion salian de prax-cicd-kv, que vive en la
-  # suscripcion de Azure bloqueada el 2026-09-15. Ahora vienen de Secret Manager
-  # de GCP, donde los 46 secretos de ese vault ya estaban replicados desde el
-  # 2026-09-09: una sola fuente de verdad, no dos copias que se desincronizan.
-  # El grupo gcp-migration aporta GCP_SA_KEY_B64 para autenticar.
-  - group: gcp-migration
-  - name: gcpProject
-    value: 'praxsuite-prod'
+  # Grupo NATIVO de ADO `secretos-ci` (Library): secretos de CI que antes
+  # venian de Secret Manager de GCP. Los lee .azure/templates/gcp-secrets.yml.
+  - group: secretos-ci
   - name: buildConfiguration
     value: 'Release'
   - name: isMaster
